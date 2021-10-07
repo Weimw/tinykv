@@ -106,6 +106,12 @@ func (l *RaftLog) LastIndex() uint64 {
 	return l.entries[len(l.entries) - 1].Index
 }
 
+func (l *RaftLog) FirstIndex() uint64 {
+	first, _ := l.storage.FirstIndex()
+	return first
+}
+
+
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
@@ -114,9 +120,39 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 		offset := i - first
 		if offset >= uint64(len(l.entries)) {
 			return 0, ErrUnavailable
+		} else if offset >= 0 {
+			return l.entries[offset].Term, nil
 		}
-		return l.entries[offset].Term, nil
 	}
-
 	return l.storage.Term(i)
+}
+
+// the remaining array will not have no
+func (l *RaftLog) RemoveEntriesFrom(lo uint64) {
+	first, _ := l.storage.FirstIndex()
+	l.stabled = min(l.stabled, lo - 1)
+	if lo - first >= uint64(len(l.entries)) {
+		return
+	}
+	l.entries = l.entries[:lo - first]
+}
+
+func (l *RaftLog) AppendEntries(entries ...*pb.Entry) {
+	for _, e := range entries {
+		l.entries = append(l.entries, pb.Entry{
+			EntryType: e.EntryType,
+			Term: e.Term,
+			Index: e.Index,
+			Data: e.Data,
+		})
+	}
+}
+
+func (l *RaftLog) GetEntries(lo uint64, hi uint64) []pb.Entry {
+	first, _ := l.storage.FirstIndex()
+	if lo >= first && hi - first <= uint64(len(l.entries)) {
+		return l.entries[lo - first : hi - first]
+	}
+	entries, _ := l.storage.Entries(lo, hi)
+	return entries
 }
