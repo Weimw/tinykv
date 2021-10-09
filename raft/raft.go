@@ -25,7 +25,7 @@ import (
 const None uint64 = 0
 
 // Debugging
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -181,7 +181,7 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 
-	raft := &Raft{
+	r := &Raft{
 		id: c.ID,
 		Term: hardState.Term,
 		Vote: hardState.Vote,
@@ -194,11 +194,15 @@ func newRaft(c *Config) *Raft {
 		electionTimeout: c.ElectionTick,
 	}
 
-	if c.Applied > 0 {
-		raft.RaftLog.applied = c.Applied
+	for _, id := range c.peers {
+		if id != r.id {
+			r.Prs[id] = &Progress{}
+		}
 	}
 
-	return raft
+	r.resetElectionElased()
+
+	return r
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -259,7 +263,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		MsgType: pb.MessageType_MsgHeartbeat,
 		To: to,
 		From: r.id,
-		LogTerm: r.Term,
+		Term: r.Term,
 		Commit: r.RaftLog.committed,
 	}
 	r.msgs = append(r.msgs, m)
@@ -354,7 +358,6 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
-	// no longer in peers
 	r.Term += 1
 	r.Vote = r.id
 	r.State = StateCandidate
@@ -373,7 +376,6 @@ func (r *Raft) becomeLeader() {
 	r.heartbeatElapsed = 0
 	
 	lastIndex := r.RaftLog.LastIndex()
-	r.printRaftState("become leader")
 	noop := &pb.Entry{Term: r.Term, Index: lastIndex + 1}
 	r.RaftLog.AppendEntries(noop)
 
@@ -384,6 +386,7 @@ func (r *Raft) becomeLeader() {
 			r.sendAppend(peer)
 		}
 	}
+	r.printRaftState("become leader")
 }
 
 // this should only be called: 
@@ -494,6 +497,10 @@ func (r *Raft) startElection() {
 			r.sendRequestVote(peer)
 		}
 	}
+
+	if len(r.Prs) == 0 {
+		r.becomeLeader()
+	}
 }
 
 // handleAppendEntries handle AppendEntries RPC request
@@ -591,15 +598,19 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		r.Vote = m.From
 		r.resetElectionElased()
 		r.sendVoteResponse(m.From, false)
+	} else {
+		r.sendVoteResponse(m.From, true)
 	}
-
-	r.sendVoteResponse(m.From, true)
 }
 
 func (r *Raft) handleAppendResponse(m pb.Message) {
 	// Your Code Here (2A).
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
+		return
+	}
+
+	if m.Term < r.Term {
 		return
 	}
 
@@ -649,6 +660,11 @@ func (r *Raft) handleVoteResponse(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 		return
 	}
+
+	if m.Term < r.Term {
+		return 
+	}
+
 	r.votes[m.From] = !m.Reject
 	n := 0
 	for _, granted := range r.votes {
@@ -678,4 +694,8 @@ func (r *Raft) removeNode(id uint64) {
 
 func (r *Raft) printRaftState(prefix string) {
 	DPrintf("Raft %v: %v Term:%v, State:%v, Lead:%v, Vote:%v, votes:%v, Prs:%v", r.id, prefix, r.Term, r.State, r.Lead, r.Vote, r.votes, r.Prs)
+}
+
+func printMessage(m pb.Message, prefix string) {
+	DPrintf("Raft %v: %v m:{Type:%v, To:%v, From:%v, Term:%v, LogTerm:%v, Index:%v, Commit:%v, Reject:%v, Entries:%v}", m.From, prefix, m.MsgType, m.To, m.From, m.Term, m.LogTerm, m.Index, m.Commit, m.Reject, m.Entries)
 }
