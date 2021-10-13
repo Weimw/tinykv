@@ -300,7 +300,7 @@ func (r *Raft) sendRequestVote(to uint64) {
 		Index: lastLogIndex,
 		Commit: r.RaftLog.committed,
 	}
-	r.printMessage(m, "send RequestVote")
+	r.printMessage(m, "send Request Vote")
 	r.msgs = append(r.msgs, m)
 }
 
@@ -376,6 +376,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+	r.printRaftState("become leader, start setup")
 	r.State = StateLeader
 	r.Lead = r.id
 	r.heartbeatElapsed = 0
@@ -386,7 +387,7 @@ func (r *Raft) becomeLeader() {
 			r.Prs[peer].Next = lastIndex + 1
 			r.Prs[peer].Match = 0
 		} else {
-			r.Prs[peer] = &Progress{Match: lastIndex, Next: lastIndex + 1}
+			r.Prs[peer] = &Progress{Match: lastIndex + 1, Next: lastIndex + 2}
 		}
 	}
 	r.printRaftState("before putting noop")
@@ -398,7 +399,7 @@ func (r *Raft) becomeLeader() {
 		}
 	}
 
-	r.printRaftState("become leader")
+	r.printRaftState("after leader finish setup")
 }
 
 // this should only be called: 
@@ -648,8 +649,18 @@ func (r *Raft) handlePropose(m pb.Message) {
 
 	r.RaftLog.AppendEntries(entries...)
 	for peer, _ := range r.Prs {
-			r.sendAppend(peer)		
+		if peer != r.id {
+			r.sendAppend(peer)
+		} else {
+			r.Prs[r.id].Match = r.RaftLog.LastIndex()
+			r.Prs[r.id].Next = r.Prs[r.id].Match + 1
+		}
 	}
+	
+	if len(r.Prs) == 1 {
+		r.RaftLog.committed = r.RaftLog.LastIndex()
+	}
+
 	r.printRaftState("after handling propose")
 }
 
@@ -669,6 +680,7 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 	}
 
 	if !m.Reject {
+		DPrintf("id:%v, Next:%v, Match:%v, mIndex:%v", m.From, r.Prs[m.From].Next, r.Prs[m.From].Match, m.Index)
 		r.Prs[m.From].Next = m.Index + 1
 		r.Prs[m.From].Match = m.Index
 	} else if r.Prs[m.From].Next > 0 {
@@ -684,19 +696,22 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 func (r *Raft) advanceCommit() {
 	lastIndex := r.RaftLog.LastIndex()
 	DPrintf("Raft %v: before advancing commit, commitIndex: %v", r.id, r.RaftLog.committed)
-	for i := r.RaftLog.committed; i <= lastIndex; i += 1 {
+	//DPrintf("committed:%v, lastIndex:%v", r.RaftLog.committed, lastIndex)
+	for i := r.RaftLog.committed + 1; i <= lastIndex; i += 1 {
 		term, _ := r.RaftLog.Term(i)
+		//DPrintf("term:%v, r.Term:%v", term, r.Term)
 		if term != r.Term {
 			continue
 		}
 		
 		n := 0
 		for _, p := range r.Prs {
+			//DPrintf("p.Match:%v", p.Match)
 			if p.Match >= i {
 				n += 1
 			}
 		}
-		
+		//DPrintf("n:%v", n)
 		if n > len(r.Prs) / 2 && r.RaftLog.committed < i {
 			r.RaftLog.committed = i
 		}
