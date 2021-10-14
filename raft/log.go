@@ -50,6 +50,7 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+	first uint64
 }
 
 // newLog returns log using the given storage. It recovers the log
@@ -59,14 +60,18 @@ func newLog(storage Storage) *RaftLog {
 	hardState, _, _ := storage.InitialState()
 	first, _ := storage.FirstIndex()
 	last, _ := storage.LastIndex()
-	ents, _ := storage.Entries(first, last + 1)
+	entries := make([]pb.Entry, 0)
+	if first <= last {
+		entries, _ = storage.Entries(first, last + 1)
+	}
 
 	return &RaftLog {
 		storage: storage,
-		committed: hardState.Commit, // or first - 1? 
+		committed: hardState.Commit, 
 		applied: first - 1,
 		stabled: last,
-		entries: ents,
+		entries: entries,
+		first: first,
 	}
 }
 
@@ -80,9 +85,8 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	first, _ := l.storage.FirstIndex()
-	if len(l.entries) > 0 && l.stabled >= first - 1 {
-		return l.entries[l.stabled - first + 1:]
+	if len(l.entries) > 0 && l.stabled >= l.first - 1 {
+		return l.entries[l.stabled - l.first + 1:]
 	}
 	return nil
 }
@@ -90,9 +94,8 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	first, _ := l.storage.FirstIndex()
-	if len(l.entries) > 0 && l.applied >= first - 1 {
-		return l.entries[l.applied - first + 1 : l.committed - first + 1]
+	if len(l.entries) > 0 && l.applied >= l.first - 1 {
+		return l.entries[l.applied - l.first + 1 : min(l.committed - l.first + 1, uint64(len(l.entries)))]
 	}
 	return nil
 }
@@ -107,34 +110,29 @@ func (l *RaftLog) LastIndex() uint64 {
 }
 
 func (l *RaftLog) FirstIndex() uint64 {
-	first, _ := l.storage.FirstIndex()
-	return first
+	return l.first
 }
 
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	first, _ := l.storage.FirstIndex()
-	if len(l.entries) > 0 {
-		offset := i - first
-		if offset >= uint64(len(l.entries)) {
+	if len(l.entries) > 0 && i >= l.first {
+		if i > l.LastIndex() {
 			return 0, ErrUnavailable
-		} else if offset >= 0 {
-			return l.entries[offset].Term, nil
 		}
+		return l.entries[i - l.first].Term, nil
 	}
 	return l.storage.Term(i)
 }
 
 // the remaining array will not have no
 func (l *RaftLog) RemoveEntriesFrom(lo uint64) {
-	first, _ := l.storage.FirstIndex()
 	l.stabled = min(l.stabled, lo - 1)
-	if lo - first >= uint64(len(l.entries)) {
+	if lo - l.first >= uint64(len(l.entries)) {
 		return
 	}
-	l.entries = l.entries[:lo - first]
+	l.entries = l.entries[:lo - l.first]
 }
 
 func (l *RaftLog) AppendEntries(entries ...*pb.Entry) {
@@ -149,9 +147,8 @@ func (l *RaftLog) AppendEntries(entries ...*pb.Entry) {
 }
 
 func (l *RaftLog) GetEntries(lo uint64, hi uint64) []pb.Entry {
-	first, _ := l.storage.FirstIndex()
-	if lo >= first && hi - first <= uint64(len(l.entries)) {
-		return l.entries[lo - first : hi - first]
+	if lo >= l.first && hi - l.first <= uint64(len(l.entries)) {
+		return l.entries[lo - l.first : hi - l.first]
 	}
 	entries, _ := l.storage.Entries(lo, hi)
 	return entries
